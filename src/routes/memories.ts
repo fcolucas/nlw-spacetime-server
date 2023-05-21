@@ -3,8 +3,17 @@ import { z } from "zod";
 import { prisma } from "../libs/prisma";
 
 export async function memoriesRoutes(app: FastifyInstance) {
-  app.get("/memories", async () => {
+  app.addHook("preHandler", async (request) => {
+    await request.jwtVerify();
+  });
+
+  app.get("/memories", async (request) => {
+    const { sub: userId } = request.user;
+
     const memories = await prisma.memory.findMany({
+      where: {
+        userId,
+      },
       select: {
         id: true,
         coverUrl: true,
@@ -21,8 +30,8 @@ export async function memoriesRoutes(app: FastifyInstance) {
     }));
   });
 
-  app.get("/memories/:id", async (request) => {
-    // const { id } = request.params;
+  app.get("/memories/:id", async (request, reply) => {
+    const { sub: userId } = request.user;
 
     const paramsSchema = z.object({
       id: z.string().uuid(),
@@ -36,10 +45,18 @@ export async function memoriesRoutes(app: FastifyInstance) {
       },
     });
 
+    if (!memory.isPublic && memory.userId !== userId) {
+      reply.status(403).send({
+        message: "You don't have permission to access this memory",
+      });
+    }
+
     return memory;
   });
 
   app.post("/memories", async (request) => {
+    const { sub: userId } = request.user;
+
     const bodySchema = z.object({
       content: z.string(),
       coverUrl: z.string(),
@@ -53,14 +70,14 @@ export async function memoriesRoutes(app: FastifyInstance) {
         content,
         coverUrl,
         isPublic,
-        userId: "f1c85562-7b26-4b71-8b79-de8113f71aae",
+        userId,
       },
     });
 
     return memory;
   });
 
-  app.put("/memories/:id", async (request) => {
+  app.put("/memories/:id", async (request, reply) => {
     const paramsSchema = z.object({
       id: z.string().uuid(),
     });
@@ -75,7 +92,19 @@ export async function memoriesRoutes(app: FastifyInstance) {
 
     const { content, coverUrl, isPublic } = bodySchema.parse(request.body);
 
-    const memory = await prisma.memory.update({
+    let memory = await prisma.memory.findUniqueOrThrow({
+      where: {
+        id,
+      },
+    });
+
+    if (memory.userId !== request.user.sub) {
+      return reply.send(403).send({
+        message: "You don't have permission to update this memory",
+      });
+    }
+
+    memory = await prisma.memory.update({
       where: {
         id,
       },
@@ -89,12 +118,24 @@ export async function memoriesRoutes(app: FastifyInstance) {
     return memory;
   });
 
-  app.delete("/memories/:id", async (request) => {
+  app.delete("/memories/:id", async (request, reply) => {
     const paramsSchema = z.object({
       id: z.string().uuid(),
     });
 
     const { id } = paramsSchema.parse(request.params);
+
+    const memory = await prisma.memory.findUniqueOrThrow({
+      where: {
+        id,
+      },
+    });
+
+    if (memory.userId !== request.user.sub) {
+      return reply.send(403).send({
+        message: "You don't have permission to delete this memory",
+      });
+    }
 
     await prisma.memory.delete({
       where: {
